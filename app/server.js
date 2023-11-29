@@ -18,9 +18,12 @@ const typeDefs = `#graphql
   }
 
 
-  # type PublicResume implements Resume {
-
-  # }
+  type User {
+    id: ID!
+    firstName: String!
+    lastName: String!
+    email: String!
+  }
 
   type Applicant {
     id: ID!
@@ -30,14 +33,36 @@ const typeDefs = `#graphql
     skills(matchingSkillsBoolean: Boolean!): [SeekerSkill]
   }
 
+  type JobPost {
+    id: ID!
+    title: String!
+    salary: String!
+    description: String!
+    location: String!
+    companyId: Int!
+    posterId: Int!
+  }
+
+  type Company {
+    id: ID!	
+    name: String!	
+    logo: String!
+  }
+
   enum DegreeType {
     MS,
     BS
   }
 
+  union NameSearchResults = User | Company
 
   type Query {
     applicants(jobPostId: ID!, best: Int): [Applicant]
+    nameSearch(companyOrApplicantName: String!): [NameSearchResults]
+  }
+
+  type Mutation {
+    apply(jobPostId: ID!, applicantId: ID!): String
   }
 
 `;
@@ -52,6 +77,24 @@ class Applicant {
   }
 
 }
+
+class User {
+  constructor(id, firstName, lastName, email) {
+    this.id = id
+    this.firstName = firstName
+    this.lastName = lastName  
+    this.email = email
+  }
+}
+
+class Company {
+  constructor(id, name, logo) {
+    this.id = id
+    this.name = name
+    this.logo = logo
+  }
+}
+
 class ApplicantList {
 
   static async genBestByJobPostId(jobPostId,best) {
@@ -210,9 +253,41 @@ const resolvers = {
       }
     }
   },
+  Mutation: {
+    apply: async (parent, args, context, info) => {
+      const data = await sequelize.query(
+        `
+        INSERT IGNORE INTO jobsearch.applicantJobPosts 
+        (userId, jobPostId) 
+        VALUES
+        (:userId, :jobPostId) 
+        `,
+        {
+          replacements: { userId: args.applicantId, jobPostId: args.jobPostId },
+          type: QueryTypes.INSERT
+        }
+      )
+
+      console.log(data)
+
+      return "Application Sent"
+
+    }
+  },
+  NameSearchResults: {
+    __resolveType: (obj) => {
+      console.log(typeof obj)
+      if ( obj instanceof User) {
+        return 'User'
+      }
+      if ( obj instanceof Company) {
+        return 'Company'
+      }
+    }
+  }
+  ,
   Query: {
       applicants: (parent,args,context,info) => {
-          console.log(args)
           if(!args.best) {
             const all = ApplicantList.genByJobPostId(args.jobPostId)
             return all
@@ -220,31 +295,47 @@ const resolvers = {
             const best = ApplicantList.genBestByJobPostId(args.jobPostId,args.best)
             return best
           }
+      },
+      nameSearch: async (parent, args, context, info) => {
+        
+        const name =  args.companyOrApplicantName
+        
+        const companies = await sequelize.query(`
+        SELECT
+        jobsearch.companies.name,
+        jobsearch.companies.logo,
+        jobsearch.companies.id
+        FROM jobsearch.companies WHERE jobsearch.companies.name like :name
+        `,{
+          replacements: { name: `%${name}%` },
+          type: QueryTypes.Query
+        })
+  
+       
+        const CompanyList = companies[0].map((ele) => 
+          new Company(ele.id, ele.name, ele.logo)
+        )
+  
+
+        const users = await sequelize.query(`
+        SELECT
+        jobsearch.users.lastName,
+        jobsearch.users.firstName,
+        jobsearch.users.id,
+        jobsearch.users.email
+        FROM jobsearch.users WHERE jobsearch.users.firstName like :name1 OR jobsearch.users.lastName like :name2
+        `,{
+          replacements: { name1: `%${name}%`, name2: `%${name}%` },
+          type: QueryTypes.Query
+        })
+  
+        const UserList = users[0].map(ele => 
+          new User(ele.id, ele.firstName, ele.lastName, ele.email)
+        )
+
+        return [...CompanyList,...UserList]
       }
     
-    // async topApplicants(_, {jobPostId, topNApplicants, topNApplicantSkills}, context) {
-    //   //TOP CANDIDATE IDS BY SKILL MATCH
-    //   var results = await sequelize.query(
-    //     `SELECT COUNT(jobsearch.applicantSkills.userId) as topId
-    //     from 
-    //     jobsearch.jobPostSkills
-    //     join jobsearch.applicantSkills on jobsearch.applicantSkills.skillId = jobsearch.jobPostSkills.skillId 
-    //     WHERE jobsearch.jobPostSkills.jobId  = :jobPostId
-    //     GROUP BY jobsearch.jobPostSkills.skillId
-    //     ORDER BY COUNT(jobsearch.applicantSkills.userId)
-    //     LIMIT :topN
-    //     `,
-    //     {
-    //       replacements: { jobPostId: jobPostId, topN: topNApplicants },
-    //       type: QueryTypes.SELECT
-    //     }
-    //   );
-      
-    //   const ids = results.map((ele) => ele['topId']);
-    //   //GRAB ALL CANDIDATES DEFER RENDERING RESUME
-    //   return ApplicantList.genByIds(jobPostId,ids);
-      
-    // },
     
   },
 
